@@ -49,7 +49,15 @@ An Android application designed for automated phone call stress testing. This to
 
 ## 📱 Screenshots
 
-> *Add screenshots of your app here*
+<div align="center">
+
+### Application Interface
+![Application Interface](📱%20Screenshots/Application%20Interface.jpg)
+
+### Application
+![Application](Application.jpg)
+
+</div>
 
 ---
 
@@ -68,7 +76,7 @@ An Android application designed for automated phone call stress testing. This to
 
 ### Method 1: Install Pre-built APK
 
-1. Download the latest APK from the [Releases](../../releases) page
+1. **Download APK**: [📥 Download base.apk](base.apk) or get the latest version from the [Releases](../../releases) page
 2. Enable "Install from Unknown Sources" in your Android settings:
    - Go to **Settings** → **Security** → **Install unknown apps**
    - Select your browser or file manager
