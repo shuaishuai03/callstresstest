@@ -28,17 +28,19 @@
                 android:padding="20dp">
 
                 <TextView
+                    android:id="@+id/tvTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="📱 通话压力测试工具"
+                    android:text="@string/screen_title"
                     android:textSize="24sp"
                     android:textStyle="bold"
                     android:textColor="#FFFFFF"/>
 
                 <TextView
+                    android:id="@+id/tvVersion"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="专业版 v2.0"
+                    android:text="@string/screen_version_placeholder"
                     android:textSize="14sp"
                     android:textColor="#E3F2FD"
                     android:layout_marginTop="4dp"/>
@@ -62,7 +64,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="⚙️ 测试配置"
+                    android:text="@string/config_title"
                     android:textSize="18sp"
                     android:textStyle="bold"
                     android:textColor="#333333"
@@ -72,7 +74,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="📞 测试电话号码"
+                    android:text="@string/field_phone_label"
                     android:textSize="14sp"
                     android:textColor="#666666"/>
 
@@ -80,7 +82,7 @@
                     android:id="@+id/etPhoneNumber"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:hint="输入11位手机号（自动添加+86）"
+                    android:hint="@string/field_phone_hint"
                     android:inputType="phone"
                     android:padding="12dp"
                     android:background="@drawable/edit_text_background"
@@ -92,7 +94,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="🔢 测试次数（无上限）"
+                    android:text="@string/field_count_label"
                     android:textSize="14sp"
                     android:textColor="#666666"/>
 
@@ -100,7 +102,7 @@
                     android:id="@+id/etCallCount"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:hint="输入测试次数，例如：10"
+                    android:hint="@string/field_count_hint"
                     android:inputType="number"
                     android:padding="12dp"
                     android:background="@drawable/edit_text_background"
@@ -113,7 +115,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="⏱️ 通话间隔（毫秒，最少5000）"
+                    android:text="@string/field_interval_label"
                     android:textSize="14sp"
                     android:textColor="#666666"/>
 
@@ -121,7 +123,7 @@
                     android:id="@+id/etCallInterval"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:hint="输入间隔时间，例如：5000（5秒）"
+                    android:hint="@string/field_interval_hint"
                     android:inputType="number"
                     android:padding="12dp"
                     android:background="@drawable/edit_text_background"
@@ -143,7 +145,7 @@
                 android:layout_width="0dp"
                 android:layout_height="56dp"
                 android:layout_weight="1"
-                android:text="▶ 开始测试"
+                android:text="@string/button_start"
                 android:textSize="16sp"
                 android:textStyle="bold"
                 android:backgroundTint="#4CAF50"
@@ -154,7 +156,7 @@
                 android:layout_width="0dp"
                 android:layout_height="56dp"
                 android:layout_weight="1"
-                android:text="⏹ 停止测试"
+                android:text="@string/button_stop"
                 android:textSize="16sp"
                 android:textStyle="bold"
                 android:backgroundTint="#F44336"/>
@@ -179,7 +181,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="📊 测试统计"
+                    android:text="@string/stats_title"
                     android:textSize="18sp"
                     android:textStyle="bold"
                     android:textColor="#333333"
@@ -198,7 +200,7 @@
                     android:id="@+id/tvProgress"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="进度：0/0"
+                    android:text="@string/progress_initial"
                     android:textSize="14sp"
                     android:textColor="#666666"
                     android:layout_marginBottom="16dp"/>
@@ -219,7 +221,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="总计"
+                            android:text="@string/stats_total"
                             android:textSize="12sp"
                             android:textColor="#999999"/>
 
@@ -244,7 +246,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="成功"
+                            android:text="@string/stats_success"
                             android:textSize="12sp"
                             android:textColor="#999999"/>
 
@@ -269,7 +271,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="失败"
+                            android:text="@string/stats_failed"
                             android:textSize="12sp"
                             android:textColor="#999999"/>
 
@@ -290,7 +292,7 @@
                     android:id="@+id/tvCurrentStatus"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="准备开始测试"
+                    android:text="@string/status_ready"
                     android:textSize="14sp"
                     android:textColor="#333333"
                     android:textStyle="bold"
@@ -325,7 +327,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="📋 测试日志"
+                        android:text="@string/log_title"
                         android:textSize="16sp"
                         android:textStyle="bold"
                         android:textColor="#333333"/>
@@ -334,7 +336,7 @@
                         android:id="@+id/btnClearLog"
                         android:layout_width="wrap_content"
                         android:layout_height="32dp"
-                        android:text="清空"
+                        android:text="@string/button_clear"
                         android:textSize="12sp"
                         android:backgroundTint="#FF9800"
                         android:minWidth="60dp"
@@ -353,7 +355,7 @@
                         android:id="@+id/tvLog"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="等待开始测试...\n"
+                        android:text="@string/log_initial"
                         android:textSize="12sp"
                         android:textColor="#333333"
                         android:fontFamily="monospace"/>

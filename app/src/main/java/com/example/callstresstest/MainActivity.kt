@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.example.callstresstest
 
 import android.Manifest
@@ -8,30 +10,29 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.CallLog
+import android.telephony.PhoneStateListener
 import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.cardview.widget.CardView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val PERMISSION_REQUEST_CODE = 100
-        private const val MIN_CALL_INTERVAL = 5000L // 最小5秒间隔
-        private const val CALL_TIMEOUT = 30000L // 30秒超时
+        private const val MIN_CALL_INTERVAL = 5000L
+        private const val CALL_TIMEOUT = 30000L
+        private const val CALL_LOG_LOOKBACK_BUFFER_MS = 3000L
     }
 
-    // UI Components
     private lateinit var etPhoneNumber: EditText
     private lateinit var etCallCount: EditText
     private lateinit var etCallInterval: EditText
@@ -43,26 +44,36 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvSuccessCalls: TextView
     private lateinit var tvFailedCalls: TextView
     private lateinit var tvCurrentStatus: TextView
+    private lateinit var tvVersion: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var scrollLog: ScrollView
     private lateinit var tvLog: TextView
-    private lateinit var cardStats: CardView
 
-    // Test Variables
     private val completedCalls = AtomicInteger(0)
     private val failedCalls = AtomicInteger(0)
+    private val handler = Handler(Looper.getMainLooper())
+
     private var totalCalls = 0
     private var currentCallNumber = 0
     private var isTestRunning = false
     private var isCallActive = false
+    private var isPausedForIncomingCall = false
     private var lastCallState = TelephonyManager.CALL_STATE_IDLE
-    private var callStartTime = 0L
-    private val handler = Handler(Looper.getMainLooper())
-    private var executorService: ExecutorService? = null
     private var telephonyManager: TelephonyManager? = null
     private var callStateCallback: MyTelephonyCallback? = null
+    private var phoneStateListener: LegacyPhoneStateListener? = null
     private var callTimeoutRunnable: Runnable? = null
     private var waitingForNextCall = false
+    private var currentTestPhoneNumber = ""
+    private var currentIntervalMs = MIN_CALL_INTERVAL
+    private var currentDialedNumber: String? = null
+    private var currentAttemptStartedAt = 0L
+    private val nextCallRunnable = Runnable {
+        waitingForNextCall = false
+        if (isTestRunning && !isPausedForIncomingCall) {
+            makeNextCall(currentTestPhoneNumber)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,10 +81,15 @@ class MainActivity : AppCompatActivity() {
 
         initializeViews()
         setupListeners()
-        checkPermissions()
-
         telephonyManager = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
-        setupCallStateListener()
+        checkPermissions()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (hasPermission(Manifest.permission.READ_PHONE_STATE)) {
+            setupCallStateListener()
+        }
     }
 
     private fun initializeViews() {
@@ -88,13 +104,15 @@ class MainActivity : AppCompatActivity() {
         tvSuccessCalls = findViewById(R.id.tvSuccessCalls)
         tvFailedCalls = findViewById(R.id.tvFailedCalls)
         tvCurrentStatus = findViewById(R.id.tvCurrentStatus)
+        tvVersion = findViewById(R.id.tvVersion)
         progressBar = findViewById(R.id.progressBar)
         scrollLog = findViewById(R.id.scrollLog)
         tvLog = findViewById(R.id.tvLog)
-        cardStats = findViewById(R.id.cardStats)
 
         btnStopTest.isEnabled = false
+        tvVersion.text = getString(R.string.screen_version, readVersionName())
         updateStats()
+        updateCurrentStatus(getString(R.string.status_ready))
     }
 
     private fun setupListeners() {
@@ -104,16 +122,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupCallStateListener() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            callStateCallback = MyTelephonyCallback()
-            try {
+        if (!hasPermission(Manifest.permission.READ_PHONE_STATE)) {
+            logMessage(getString(R.string.log_listener_permission_missing), true)
+            return
+        }
+
+        teardownCallStateListener()
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                callStateCallback = MyTelephonyCallback()
                 telephonyManager?.registerTelephonyCallback(
                     mainExecutor,
                     callStateCallback!!
                 )
-            } catch (e: SecurityException) {
-                logMessage("⚠️ 无法注册通话状态监听器：权限不足", true)
+            } else {
+                @Suppress("DEPRECATION")
+                LegacyPhoneStateListener().also {
+                    phoneStateListener = it
+                    telephonyManager?.listen(it, PhoneStateListener.LISTEN_CALL_STATE)
+                }
             }
+        } catch (e: SecurityException) {
+            logMessage(getString(R.string.log_listener_permission_missing), true)
         }
     }
 
@@ -124,88 +155,96 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private inner class LegacyPhoneStateListener : PhoneStateListener() {
+        @Deprecated("Deprecated in Java")
+        override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+            super.onCallStateChanged(state, phoneNumber)
+            handleCallStateChange(state)
+        }
+    }
+
     private fun handleCallStateChange(state: Int) {
-        logMessage("📡 通话状态变化: ${getStateString(lastCallState)} -> ${getStateString(state)}", false)
+        if (state == lastCallState) {
+            return
+        }
+
+        logMessage(
+            getString(
+                R.string.log_call_state_change,
+                getStateString(lastCallState),
+                getStateString(state)
+            ),
+            false
+        )
 
         when (state) {
-            TelephonyManager.CALL_STATE_IDLE -> {
-                // 通话空闲状态
-                if (isTestRunning && !waitingForNextCall) {
-                    if (lastCallState == TelephonyManager.CALL_STATE_OFFHOOK) {
-                        // 从通话中结束 -> 接通了电话
-                        val callDuration = (System.currentTimeMillis() - callStartTime) / 1000
-                        logMessage("✅ 通话已接通并结束（通话时长：${callDuration}秒）", true)
-                        completedCalls.incrementAndGet()
-                        isCallActive = false
-                        updateProgress()
-                        scheduleNextCall()
-                    } else if (lastCallState == TelephonyManager.CALL_STATE_RINGING) {
-                        // 从响铃结束但未接通 -> 未接通（可能无人接听）
-                        logMessage("❌ 通话未接通（无人接听或被拒接）", true)
-                        failedCalls.incrementAndGet()
-                        isCallActive = false
-                        updateProgress()
-                        scheduleNextCall()
-                    } else if (isCallActive) {
-                        // 其他情况下的通话结束
-                        logMessage("⚠️ 通话异常结束", true)
-                        failedCalls.incrementAndGet()
-                        isCallActive = false
-                        updateProgress()
-                        scheduleNextCall()
-                    }
-                }
-                callTimeoutRunnable?.let { handler.removeCallbacks(it) }
-            }
-
+            TelephonyManager.CALL_STATE_IDLE -> handleIdleState()
             TelephonyManager.CALL_STATE_OFFHOOK -> {
-                // 通话进行中（已接通）
-                if (isTestRunning) {
-                    isCallActive = true
-                    callStartTime = System.currentTimeMillis()
-                    callTimeoutRunnable?.let { handler.removeCallbacks(it) }
-                    logMessage("📞 通话已接通", false)
+                if (isTestRunning && isCallActive) {
+                    updateCurrentStatus(getString(R.string.status_waiting_for_result))
                 }
             }
-
-            TelephonyManager.CALL_STATE_RINGING -> {
-                // 响铃中
-                if (isTestRunning) {
-                    logMessage("🔔 正在呼叫，等待接听...", false)
-                }
-            }
+            TelephonyManager.CALL_STATE_RINGING -> handleIncomingCallDetected()
         }
 
         lastCallState = state
     }
 
+    private fun handleIdleState() {
+        callTimeoutRunnable?.let { handler.removeCallbacks(it) }
+
+        if (!isTestRunning) {
+            return
+        }
+
+        if (isCallActive && !waitingForNextCall) {
+            val pausedByIncomingCall = isPausedForIncomingCall
+            isPausedForIncomingCall = false
+            finalizeCurrentCall(pausedByIncomingCall)
+            return
+        }
+
+        if (isPausedForIncomingCall) {
+            isPausedForIncomingCall = false
+            logMessage(getString(R.string.log_incoming_cleared), true)
+            updateCurrentStatus(getString(R.string.status_resuming))
+            if (currentCallNumber < totalCalls) {
+                scheduleNextCall()
+            }
+        }
+    }
+
+    private fun handleIncomingCallDetected() {
+        if (!isTestRunning) {
+            return
+        }
+
+        isPausedForIncomingCall = true
+        waitingForNextCall = false
+        handler.removeCallbacks(nextCallRunnable)
+        callTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        logMessage(getString(R.string.log_incoming_detected), true)
+        updateCurrentStatus(getString(R.string.status_paused_for_incoming))
+    }
+
     private fun getStateString(state: Int): String {
         return when (state) {
-            TelephonyManager.CALL_STATE_IDLE -> "IDLE(空闲)"
-            TelephonyManager.CALL_STATE_OFFHOOK -> "OFFHOOK(通话中)"
-            TelephonyManager.CALL_STATE_RINGING -> "RINGING(响铃)"
-            else -> "UNKNOWN(未知)"
+            TelephonyManager.CALL_STATE_IDLE -> getString(R.string.call_state_idle)
+            TelephonyManager.CALL_STATE_OFFHOOK -> getString(R.string.call_state_offhook)
+            TelephonyManager.CALL_STATE_RINGING -> getString(R.string.call_state_ringing)
+            else -> getString(R.string.call_state_unknown)
         }
     }
 
     private fun scheduleNextCall() {
         waitingForNextCall = true
         callTimeoutRunnable?.let { handler.removeCallbacks(it) }
-
-        val interval = try {
-            etCallInterval.text.toString().toLongOrNull() ?: MIN_CALL_INTERVAL
-        } catch (e: Exception) {
-            MIN_CALL_INTERVAL
-        }
-
-        logMessage("⏳ 等待 ${interval / 1000} 秒后进行下一次拨号...", false)
-
-        handler.postDelayed({
-            waitingForNextCall = false
-            if (isTestRunning) {
-                continueNextCall()
-            }
-        }, interval)
+        handler.removeCallbacks(nextCallRunnable)
+        logMessage(
+            getString(R.string.log_wait_next_call, currentIntervalMs / 1000),
+            false
+        )
+        handler.postDelayed(nextCallRunnable, currentIntervalMs)
     }
 
     private fun checkPermissions() {
@@ -215,12 +254,11 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.READ_CALL_LOG
         )
 
-        val allGranted = permissions.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
-
-        if (!allGranted) {
+        if (!hasAllRequiredPermissions()) {
             ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE)
+        } else {
+            logMessage(getString(R.string.log_permissions_granted), false)
+            setupCallStateListener()
         }
     }
 
@@ -232,59 +270,83 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
         if (requestCode == PERMISSION_REQUEST_CODE) {
-            val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
-
-            if (!allGranted) {
-                showDialog("权限不足", "应用需要以下权限才能运行：\n• 拨打电话\n• 读取通话状态\n• 读取通话记录\n\n请在设置中授予权限。")
+            if (!grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                showDialog(
+                    getString(R.string.dialog_title_permission_missing),
+                    getString(R.string.dialog_message_permission_missing)
+                )
             } else {
-                logMessage("✓ 所有权限已授予", false)
+                logMessage(getString(R.string.log_permissions_granted), false)
+                setupCallStateListener()
             }
         }
     }
 
     private fun validateAndStartTest() {
+        if (!hasAllRequiredPermissions()) {
+            checkPermissions()
+            showDialog(
+                getString(R.string.dialog_title_permission_missing),
+                getString(R.string.dialog_message_permission_missing)
+            )
+            return
+        }
+
         val phoneNumber = etPhoneNumber.text.toString().trim()
         val callCountStr = etCallCount.text.toString().trim()
         val intervalStr = etCallInterval.text.toString().trim()
 
-        // 验证电话号码
         if (phoneNumber.isEmpty()) {
-            showDialog("输入错误", "请输入测试电话号码")
+            showDialog(
+                getString(R.string.dialog_title_input_error),
+                getString(R.string.dialog_message_phone_required)
+            )
             return
         }
 
-        val formattedNumber = formatPhoneNumber(phoneNumber)
-        if (formattedNumber.length < 11) {
-            showDialog("号码错误", "请输入有效的11位手机号码")
+        val formattedNumber = CallNumberUtils.formatForDialing(phoneNumber)
+        if (formattedNumber == null) {
+            showDialog(
+                getString(R.string.dialog_title_number_error),
+                getString(R.string.dialog_message_number_error)
+            )
             return
         }
 
-        // 验证通话次数（移除上限限制）
         if (callCountStr.isEmpty()) {
-            showDialog("输入错误", "请输入测试次数")
+            showDialog(
+                getString(R.string.dialog_title_input_error),
+                getString(R.string.dialog_message_count_required)
+            )
             return
         }
 
         val callCount = try {
             callCountStr.toInt()
         } catch (e: NumberFormatException) {
-            showDialog("输入错误", "测试次数必须是数字")
+            showDialog(
+                getString(R.string.dialog_title_input_error),
+                getString(R.string.dialog_message_count_numeric)
+            )
             return
         }
 
         if (callCount < 1) {
-            showDialog("数值错误", "测试次数必须大于 0")
+            showDialog(
+                getString(R.string.dialog_title_value_error),
+                getString(R.string.dialog_message_count_positive)
+            )
             return
         }
 
         if (callCount > 1000) {
             AlertDialog.Builder(this)
-                .setTitle("⚠️ 警告")
-                .setMessage("测试次数较大（${callCount}次），可能需要较长时间。\n\n是否继续？")
-                .setPositiveButton("继续") { _, _ ->
+                .setTitle(R.string.dialog_title_large_batch)
+                .setMessage(getString(R.string.dialog_message_large_batch, callCount))
+                .setPositiveButton(R.string.action_continue) { _, _ ->
                     proceedWithValidation(formattedNumber, callCount, intervalStr)
                 }
-                .setNegativeButton("取消", null)
+                .setNegativeButton(R.string.action_cancel, null)
                 .show()
         } else {
             proceedWithValidation(formattedNumber, callCount, intervalStr)
@@ -292,67 +354,45 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun proceedWithValidation(formattedNumber: String, callCount: Int, intervalStr: String) {
-        // 验证间隔时间
         val interval = if (intervalStr.isEmpty()) {
             MIN_CALL_INTERVAL
         } else {
             try {
                 intervalStr.toLong()
             } catch (e: NumberFormatException) {
-                showDialog("输入错误", "间隔时间必须是数字")
+                showDialog(
+                    getString(R.string.dialog_title_input_error),
+                    getString(R.string.dialog_message_interval_numeric)
+                )
                 return
             }
         }
 
         if (interval < MIN_CALL_INTERVAL) {
-            showDialog("间隔过短", "为保护手机，间隔时间不能少于 ${MIN_CALL_INTERVAL / 1000} 秒")
+            showDialog(
+                getString(R.string.dialog_title_interval_too_short),
+                getString(R.string.dialog_message_interval_too_short, MIN_CALL_INTERVAL / 1000)
+            )
             return
         }
 
-        // 确认开始测试
         val estimatedMinutes = (callCount * interval / 1000 / 60).toInt()
-        val message = """
-            即将开始压力测试：
-            
-            📱 测试号码：$formattedNumber
-            🔢 测试次数：$callCount 次
-            ⏱️ 间隔时间：${interval / 1000} 秒
-            
-            预计耗时：约 $estimatedMinutes 分钟
-            
-            请确认是否开始？
-        """.trimIndent()
-
         AlertDialog.Builder(this)
-            .setTitle("确认开始测试")
-            .setMessage(message)
-            .setPositiveButton("开始") { _, _ ->
+            .setTitle(R.string.dialog_title_confirm_start)
+            .setMessage(
+                getString(
+                    R.string.dialog_message_confirm_start,
+                    formattedNumber,
+                    callCount,
+                    interval / 1000,
+                    estimatedMinutes
+                )
+            )
+            .setPositiveButton(R.string.action_start) { _, _ ->
                 startStressTest(formattedNumber, callCount, interval)
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(R.string.action_cancel, null)
             .show()
-    }
-
-    private fun formatPhoneNumber(phoneNumber: String): String {
-        var cleaned = phoneNumber.replace(Regex("[\\s-()]"), "")
-
-        if (cleaned.startsWith("+86")) {
-            return cleaned
-        }
-
-        if (cleaned.startsWith("86") && cleaned.length > 11) {
-            return "+$cleaned"
-        }
-
-        if (cleaned.startsWith("1") && cleaned.length == 11) {
-            return "+86$cleaned"
-        }
-
-        if (cleaned.length == 11) {
-            return "+86$cleaned"
-        }
-
-        return cleaned
     }
 
     private fun startStressTest(phoneNumber: String, callCount: Int, interval: Long) {
@@ -362,7 +402,14 @@ class MainActivity : AppCompatActivity() {
         totalCalls = callCount
         currentCallNumber = 0
         waitingForNextCall = false
+        isPausedForIncomingCall = false
         lastCallState = TelephonyManager.CALL_STATE_IDLE
+        currentTestPhoneNumber = phoneNumber
+        currentIntervalMs = interval
+        currentDialedNumber = null
+        currentAttemptStartedAt = 0L
+        handler.removeCallbacks(nextCallRunnable)
+        callTimeoutRunnable?.let { handler.removeCallbacks(it) }
 
         btnStartTest.isEnabled = false
         btnStopTest.isEnabled = true
@@ -373,25 +420,25 @@ class MainActivity : AppCompatActivity() {
         progressBar.max = callCount
         progressBar.progress = 0
 
-        updateCurrentStatus("准备开始测试...")
+        updateCurrentStatus(getString(R.string.status_preparing))
         updateStats()
 
-        logMessage("═════════════════════════════════", false)
-        logMessage("🚀 压力测试开始", true)
-        logMessage("测试号码：$phoneNumber", false)
-        logMessage("总次数：$callCount 次", false)
-        logMessage("间隔：${interval / 1000} 秒", false)
-        logMessage("═════════════════════════════════", false)
-
-        executorService = Executors.newSingleThreadExecutor()
+        logMessage(getString(R.string.log_divider), false)
+        logMessage(getString(R.string.log_test_started), true)
+        logMessage(getString(R.string.log_test_number, phoneNumber), false)
+        logMessage(getString(R.string.log_test_count, callCount), false)
+        logMessage(getString(R.string.log_test_interval, interval / 1000), false)
+        logMessage(getString(R.string.log_divider), false)
 
         handler.postDelayed({
-            makeNextCall(phoneNumber, interval)
+            makeNextCall(currentTestPhoneNumber)
         }, 1000)
     }
 
-    private fun makeNextCall(phoneNumber: String, interval: Long) {
-        if (!isTestRunning || waitingForNextCall) return
+    private fun makeNextCall(phoneNumber: String) {
+        if (!isTestRunning || waitingForNextCall || isPausedForIncomingCall) {
+            return
+        }
 
         currentCallNumber++
 
@@ -400,9 +447,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        updateCurrentStatus("正在拨打第 $currentCallNumber/$totalCalls 次电话...")
-        logMessage("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", false)
-        logMessage("📞 第 $currentCallNumber 次拨号", true)
+        updateCurrentStatus(getString(R.string.status_dialing, currentCallNumber, totalCalls))
+        logMessage(getString(R.string.log_minor_divider), false)
+        logMessage(getString(R.string.log_call_attempt, currentCallNumber), true)
 
         try {
             val callIntent = Intent(Intent.ACTION_CALL).apply {
@@ -410,101 +457,155 @@ class MainActivity : AppCompatActivity() {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
 
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE)
-                == PackageManager.PERMISSION_GRANTED) {
-
+            if (hasPermission(Manifest.permission.CALL_PHONE)) {
+                currentDialedNumber = phoneNumber
+                currentAttemptStartedAt = System.currentTimeMillis()
                 startActivity(callIntent)
                 isCallActive = true
+                updateCurrentStatus(getString(R.string.status_waiting_for_result))
+                logMessage(getString(R.string.log_call_intent_sent), false)
+                logMessage(getString(R.string.log_call_waiting_result), false)
 
-                // 设置超时检测
                 callTimeoutRunnable = Runnable {
                     if (isCallActive && isTestRunning && !waitingForNextCall) {
                         isCallActive = false
+                        currentDialedNumber = null
+                        currentAttemptStartedAt = 0L
                         failedCalls.incrementAndGet()
-                        logMessage("⏱️ 通话超时（${CALL_TIMEOUT / 1000}秒无响应）", true)
+                        logMessage(
+                            getString(R.string.log_call_timeout, CALL_TIMEOUT / 1000),
+                            true
+                        )
                         updateProgress()
-                        scheduleNextCall()
+                        finishOrScheduleNextCall()
                     }
                 }
 
                 handler.postDelayed(callTimeoutRunnable!!, CALL_TIMEOUT)
-
             } else {
                 failedCalls.incrementAndGet()
-                logMessage("❌ 权限被拒绝", true)
+                logMessage(getString(R.string.log_call_permission_denied), true)
                 updateProgress()
-                scheduleNextCall()
+                finishOrScheduleNextCall()
             }
-
         } catch (e: Exception) {
             failedCalls.incrementAndGet()
-            logMessage("❌ 拨号失败：${e.message}", true)
+            currentDialedNumber = null
+            currentAttemptStartedAt = 0L
+            logMessage(
+                getString(R.string.log_call_failed, e.message ?: "unknown error"),
+                true
+            )
             updateProgress()
+            finishOrScheduleNextCall()
+        }
+    }
+
+    private fun finalizeCurrentCall(pausedByIncomingCall: Boolean) {
+        val dialedNumber = currentDialedNumber
+        currentDialedNumber = null
+        isCallActive = false
+
+        val verification = if (dialedNumber != null) {
+            verifyLatestOutgoingCall(dialedNumber, currentAttemptStartedAt)
+        } else {
+            null
+        }
+        currentAttemptStartedAt = 0L
+
+        when {
+            verification?.durationSeconds?.let { it > 0 } == true -> {
+                completedCalls.incrementAndGet()
+                logMessage(
+                    getString(R.string.log_call_verified_success, verification.durationSeconds),
+                    true
+                )
+            }
+            verification != null -> {
+                failedCalls.incrementAndGet()
+                logMessage(getString(R.string.log_call_verified_failed), true)
+            }
+            else -> {
+                failedCalls.incrementAndGet()
+                if (hasPermission(Manifest.permission.READ_CALL_LOG)) {
+                    logMessage(getString(R.string.log_call_verification_unavailable), true)
+                }
+            }
+        }
+
+        if (pausedByIncomingCall) {
+            logMessage(getString(R.string.log_incoming_cleared), false)
+        }
+
+        updateProgress()
+        finishOrScheduleNextCall()
+    }
+
+    private fun finishOrScheduleNextCall() {
+        if (!isTestRunning) {
+            return
+        }
+
+        if (currentCallNumber >= totalCalls) {
+            completeTest()
+        } else if (!isPausedForIncomingCall) {
             scheduleNextCall()
         }
     }
 
-    private fun continueNextCall() {
-        val phoneNumber = formatPhoneNumber(etPhoneNumber.text.toString().trim())
-        val interval = try {
-            etCallInterval.text.toString().toLongOrNull() ?: MIN_CALL_INTERVAL
-        } catch (e: Exception) {
-            MIN_CALL_INTERVAL
-        }
-
-        makeNextCall(phoneNumber, interval)
-    }
-
     private fun stopStressTest() {
         AlertDialog.Builder(this)
-            .setTitle("确认停止")
-            .setMessage("确定要停止当前测试吗？")
-            .setPositiveButton("停止") { _, _ ->
+            .setTitle(R.string.dialog_title_confirm_stop)
+            .setMessage(R.string.dialog_message_confirm_stop)
+            .setPositiveButton(R.string.action_stop) { _, _ ->
                 isTestRunning = false
                 isCallActive = false
+                isPausedForIncomingCall = false
                 waitingForNextCall = false
                 callTimeoutRunnable?.let { handler.removeCallbacks(it) }
-                executorService?.shutdownNow()
+                handler.removeCallbacks(nextCallRunnable)
+                currentDialedNumber = null
+                currentAttemptStartedAt = 0L
                 resetUI()
-                logMessage("⏹️ 测试已手动停止", true)
-                updateCurrentStatus("测试已停止")
+                logMessage(getString(R.string.log_manual_stop), true)
+                updateCurrentStatus(getString(R.string.status_stopped))
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(R.string.action_cancel, null)
             .show()
     }
 
     private fun completeTest() {
         isTestRunning = false
         isCallActive = false
+        isPausedForIncomingCall = false
         waitingForNextCall = false
         callTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        handler.removeCallbacks(nextCallRunnable)
         resetUI()
 
         val successRate = if (totalCalls > 0) {
             (completedCalls.get().toFloat() / totalCalls * 100).toInt()
         } else 0
 
-        logMessage("═════════════════════════════════", false)
-        logMessage("✅ 测试完成！", true)
-        logMessage("总计：$totalCalls 次", false)
-        logMessage("成功：${completedCalls.get()} 次", false)
-        logMessage("失败：${failedCalls.get()} 次", false)
-        logMessage("成功率：$successRate%", false)
-        logMessage("═════════════════════════════════", false)
+        logMessage(getString(R.string.log_divider), false)
+        logMessage(getString(R.string.log_test_completed), true)
+        logMessage(getString(R.string.log_result_total, totalCalls), false)
+        logMessage(getString(R.string.log_result_success, completedCalls.get()), false)
+        logMessage(getString(R.string.log_result_failed, failedCalls.get()), false)
+        logMessage(getString(R.string.log_result_rate, successRate), false)
+        logMessage(getString(R.string.log_divider), false)
 
-        updateCurrentStatus("测试完成 - 成功率 $successRate%")
+        updateCurrentStatus(getString(R.string.status_completed, successRate))
 
         showDialog(
-            "测试完成",
-            """
-            压力测试已完成！
-            
-            📊 测试结果：
-            • 总计：$totalCalls 次
-            • 成功：${completedCalls.get()} 次
-            • 失败：${failedCalls.get()} 次
-            • 成功率：$successRate%
-            """.trimIndent()
+            getString(R.string.dialog_title_test_complete),
+            getString(
+                R.string.dialog_message_test_complete,
+                totalCalls,
+                completedCalls.get(),
+                failedCalls.get(),
+                successRate
+            )
         )
     }
 
@@ -526,7 +627,7 @@ class MainActivity : AppCompatActivity() {
         tvTotalCalls.text = totalCalls.toString()
         tvSuccessCalls.text = completedCalls.get().toString()
         tvFailedCalls.text = failedCalls.get().toString()
-        tvProgress.text = "进度：${progressBar.progress}/$totalCalls"
+        tvProgress.text = getString(R.string.progress_text, progressBar.progress, totalCalls)
     }
 
     private fun updateCurrentStatus(status: String) {
@@ -546,25 +647,110 @@ class MainActivity : AppCompatActivity() {
 
     private fun clearLog() {
         tvLog.text = ""
-        logMessage("日志已清空", false)
+        logMessage(getString(R.string.log_cleared), false)
     }
 
     private fun showDialog(title: String, message: String) {
         AlertDialog.Builder(this)
             .setTitle(title)
             .setMessage(message)
-            .setPositiveButton("确定", null)
+            .setPositiveButton(R.string.action_confirm, null)
             .show()
+    }
+
+    private fun hasAllRequiredPermissions(): Boolean {
+        return hasPermission(Manifest.permission.CALL_PHONE) &&
+            hasPermission(Manifest.permission.READ_PHONE_STATE) &&
+            hasPermission(Manifest.permission.READ_CALL_LOG)
+    }
+
+    private fun readVersionName(): String {
+        return try {
+            val packageInfo = packageManager.getPackageInfo(packageName, 0)
+            packageInfo.versionName ?: "unknown"
+        } catch (_: Exception) {
+            "unknown"
+        }
+    }
+
+    private fun hasPermission(permission: String): Boolean {
+        return ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun verifyLatestOutgoingCall(
+        targetNumber: String,
+        startedAt: Long
+    ): CallVerification? {
+        if (!hasPermission(Manifest.permission.READ_CALL_LOG) || startedAt == 0L) {
+            return null
+        }
+
+        val projection = arrayOf(
+            CallLog.Calls.NUMBER,
+            CallLog.Calls.DATE,
+            CallLog.Calls.DURATION,
+            CallLog.Calls.TYPE
+        )
+        val selection = "${CallLog.Calls.DATE} >= ? AND ${CallLog.Calls.TYPE} = ?"
+        val selectionArgs = arrayOf(
+            (startedAt - CALL_LOG_LOOKBACK_BUFFER_MS).toString(),
+            CallLog.Calls.OUTGOING_TYPE.toString()
+        )
+
+        return try {
+            contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                "${CallLog.Calls.DATE} DESC"
+            )?.use { cursor ->
+                val numberIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER)
+                val durationIndex = cursor.getColumnIndexOrThrow(CallLog.Calls.DURATION)
+
+                while (cursor.moveToNext()) {
+                    val loggedNumber = cursor.getString(numberIndex)
+                    if (CallNumberUtils.numbersMatch(loggedNumber, targetNumber)) {
+                        return CallVerification(
+                            durationSeconds = cursor.getLong(durationIndex)
+                        )
+                    }
+                }
+                null
+            }
+        } catch (e: SecurityException) {
+            logMessage(getString(R.string.log_call_log_unavailable, e.message ?: "security exception"), true)
+            null
+        } catch (e: Exception) {
+            logMessage(getString(R.string.log_call_log_unavailable, e.message ?: "unknown error"), true)
+            null
+        }
+    }
+
+    private fun teardownCallStateListener() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                callStateCallback?.let { telephonyManager?.unregisterTelephonyCallback(it) }
+                callStateCallback = null
+            } else {
+                @Suppress("DEPRECATION")
+                phoneStateListener?.let {
+                    telephonyManager?.listen(it, PhoneStateListener.LISTEN_NONE)
+                }
+                phoneStateListener = null
+            }
+        } catch (_: Exception) {
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        executorService?.shutdownNow()
+        handler.removeCallbacks(nextCallRunnable)
         callTimeoutRunnable?.let { handler.removeCallbacks(it) }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            callStateCallback?.let {
-                telephonyManager?.unregisterTelephonyCallback(it)
-            }
-        }
+        teardownCallStateListener()
     }
+
+    private data class CallVerification(
+        val durationSeconds: Long
+    )
 }

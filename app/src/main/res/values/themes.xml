@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <style name="Theme.CallStressTest" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.CallStressTest" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">#1E88E5</item>
+        <item name="colorPrimaryVariant">#1565C0</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSecondary">#43A047</item>
+        <item name="colorOnSecondary">@android:color/white</item>
+        <item name="android:statusBarColor">#1565C0</item>
+    </style>
 </resources>

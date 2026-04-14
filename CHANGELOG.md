@@ -1,175 +1,34 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+本文件从 2026-04-14 的仓库审计整改开始，记录已规范化的版本变更。
 
 ## [Unreleased]
 
-### Planned Features
-- Support for international phone numbers
-- Export test results to CSV/JSON
-- Call recording capability (where legally permitted)
-- Dark mode support
-- Multiple phone number testing
-- Scheduled test execution
-- Network quality metrics
+- 暂无已确认条目。
 
-## [1.0.0] - 2024-11-08
+## [1.1.0] - 2026-04-14
 
 ### Added
-- Initial release of Call Stress Test
-- Automated phone call stress testing functionality
-- Real-time call state monitoring (IDLE, RINGING, OFFHOOK)
-- Configurable test parameters:
-  - Phone number input with automatic formatting
-  - Customizable call count (unlimited)
-  - Adjustable interval timing (minimum 5 seconds)
-- Comprehensive statistics tracking:
-  - Total calls counter
-  - Successful calls counter
-  - Failed calls counter
-  - Success rate percentage
-- Visual progress indicators:
-  - Progress bar
-  - Real-time status updates
-  - Statistics card
-- Detailed logging system:
-  - Timestamped log entries
-  - Call state change notifications
-  - Success/failure indicators
-  - Scrollable log view
-- Safety features:
-  - Minimum 5-second interval enforcement
-  - 30-second call timeout detection
-  - Confirmation dialogs for large batches (>1000 calls)
-  - Stop test functionality
-- Permission management:
-  - Runtime permission requests
-  - Permission status checking
-  - User-friendly permission explanations
-- Error handling:
-  - Input validation
-  - Network error detection
-  - Graceful failure recovery
-- Material Design UI:
-  - Clean, intuitive interface
-  - CardView statistics display
-  - Responsive layout
-  - User-friendly controls
-- Android telephony integration:
-  - TelephonyManager integration
-  - TelephonyCallback for Android 12+
-  - Call state monitoring
-  - Automatic call placement
-- Thread management:
-  - Handler-based scheduling
-  - ExecutorService for background tasks
-  - Proper lifecycle management
-- Phone number formatting:
-  - Support for Chinese mobile numbers (+86)
-  - Automatic country code detection
-  - Format validation
 
-### Technical Details
-- Minimum SDK: API 24 (Android 7.0)
-- Target SDK: API 36 (Android 14+)
-- Language: Kotlin
-- Architecture: Single Activity
-- UI Framework: Android Views with Material Design
+- Android 7.0-11 的 `PhoneStateListener` 通话状态监听回退实现。
+- 通过通话记录辅助确认接通结果的判定逻辑。
+- 国际号码的显式国家码输入支持。
+- 来电暂停与恢复测试队列的处理逻辑。
+- 版本化的仓库内调试 APK 与 `SHA256SUMS` 校验文件。
+- GitHub Actions Android CI 工作流。
+- issue 模板、PR 模板、安全策略和行为准则。
 
-### Known Issues
-- None reported
+### Changed
 
----
+- 将用户可见界面文案收拢到字符串资源。
+- 移除未接入 UI 的 Compose 依赖与主题残留。
+- 将工程编译基线统一为 `compileSdk 34` / `targetSdk 34`。
+- 将应用版本统一为 `1.1.0`。
+- 重写 `README.md`、`TUTORIAL.md`、`CONTRIBUTING.md` 以匹配仓库真实状态。
 
-## Version History
+### Fixed
 
-### Version Numbering
-
-This project uses [Semantic Versioning](https://semver.org/):
-- **MAJOR** version: Incompatible API changes
-- **MINOR** version: New functionality (backwards-compatible)
-- **PATCH** version: Bug fixes (backwards-compatible)
-
-### Release Types
-
-- **Stable**: Production-ready releases
-- **Beta**: Feature-complete but may have bugs
-- **Alpha**: Early testing releases
-
----
-
-## How to Update
-
-### For Users
-
-1. Download the latest APK from [Releases](../../releases)
-2. Uninstall the old version (optional, but recommended)
-3. Install the new APK
-4. Grant permissions when prompted
-
-### For Developers
-
-1. Pull the latest changes:
-   ```bash
-   git pull origin main
-   ```
-
-2. Sync Gradle dependencies:
-   ```bash
-   ./gradlew clean build
-   ```
-
-3. Test on device:
-   ```bash
-   ./gradlew assembleDebug
-   adb install app/build/outputs/apk/debug/app-debug.apk
-   ```
-
----
-
-## Migration Guides
-
-### Migrating to 1.0.0
-
-This is the initial release, no migration needed.
-
----
-
-## Deprecation Notices
-
-None at this time.
-
----
-
-## Security Updates
-
-### Reporting Security Issues
-
-If you discover a security vulnerability, please email: security@example.com
-
-Do NOT create a public issue for security vulnerabilities.
-
----
-
-## Contributors
-
-Thank you to all contributors who have helped improve this project!
-
-- Initial development and release
-
----
-
-## Links
-
-- [GitHub Repository](https://github.com/yourusername/CallStressTest)
-- [Issue Tracker](https://github.com/yourusername/CallStressTest/issues)
-- [Releases](https://github.com/yourusername/CallStressTest/releases)
-- [Documentation](README.md)
-
----
-
-[Unreleased]: https://github.com/yourusername/CallStressTest/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/yourusername/CallStressTest/releases/tag/v1.0.0
+- 修正文档中关于权限、版本、发布资产、仓库链接和协作流程的大量失真描述。
+- 修复 Android 12 以下系统没有通话状态监听回退实现的问题。
+- 修复测试结束后仍等待一个额外间隔才完成的问题。
+- 修复通话结果仅依赖状态回调、无法稳定区分接通与未接通的问题。
