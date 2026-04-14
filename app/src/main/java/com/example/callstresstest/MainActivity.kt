@@ -31,6 +31,9 @@ class MainActivity : AppCompatActivity() {
         private const val MIN_CALL_INTERVAL = 5000L
         private const val CALL_TIMEOUT = 30000L
         private const val CALL_LOG_LOOKBACK_BUFFER_MS = 3000L
+        private const val CALL_LOG_VERIFICATION_INITIAL_DELAY_MS = 1000L
+        private const val CALL_LOG_VERIFICATION_RETRY_DELAY_MS = 1000L
+        private const val CALL_LOG_VERIFICATION_MAX_RETRIES = 3
     }
 
     private lateinit var etPhoneNumber: EditText
@@ -63,6 +66,7 @@ class MainActivity : AppCompatActivity() {
     private var callStateCallback: MyTelephonyCallback? = null
     private var phoneStateListener: LegacyPhoneStateListener? = null
     private var callTimeoutRunnable: Runnable? = null
+    private var pendingCallVerificationRunnable: Runnable? = null
     private var waitingForNextCall = false
     private var currentTestPhoneNumber = ""
     private var currentIntervalMs = MIN_CALL_INTERVAL
@@ -410,6 +414,8 @@ class MainActivity : AppCompatActivity() {
         currentAttemptStartedAt = 0L
         handler.removeCallbacks(nextCallRunnable)
         callTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        pendingCallVerificationRunnable?.let { handler.removeCallbacks(it) }
+        pendingCallVerificationRunnable = null
 
         btnStartTest.isEnabled = false
         btnStopTest.isEnabled = true
@@ -503,15 +509,81 @@ class MainActivity : AppCompatActivity() {
 
     private fun finalizeCurrentCall(pausedByIncomingCall: Boolean) {
         val dialedNumber = currentDialedNumber
+        val attemptStartedAt = currentAttemptStartedAt
         currentDialedNumber = null
+        currentAttemptStartedAt = 0L
         isCallActive = false
 
-        val verification = if (dialedNumber != null) {
-            verifyLatestOutgoingCall(dialedNumber, currentAttemptStartedAt)
-        } else {
-            null
+        if (
+            dialedNumber == null ||
+            attemptStartedAt == 0L ||
+            !hasPermission(Manifest.permission.READ_CALL_LOG)
+        ) {
+            completeCallVerification(null, pausedByIncomingCall)
+            return
         }
-        currentAttemptStartedAt = 0L
+
+        scheduleCallVerification(
+            dialedNumber = dialedNumber,
+            startedAt = attemptStartedAt,
+            pausedByIncomingCall = pausedByIncomingCall,
+            attempt = 0,
+            delayMs = CALL_LOG_VERIFICATION_INITIAL_DELAY_MS
+        )
+    }
+
+    private fun scheduleCallVerification(
+        dialedNumber: String,
+        startedAt: Long,
+        pausedByIncomingCall: Boolean,
+        attempt: Int,
+        delayMs: Long
+    ) {
+        pendingCallVerificationRunnable?.let { handler.removeCallbacks(it) }
+
+        val verificationRunnable = Runnable {
+            pendingCallVerificationRunnable = null
+
+            if (!isTestRunning) {
+                return@Runnable
+            }
+
+            val lookupResult = lookupLatestOutgoingCall(dialedNumber, startedAt)
+            when {
+                lookupResult.verification != null -> {
+                    completeCallVerification(lookupResult.verification, pausedByIncomingCall)
+                }
+                lookupResult.errorMessage != null -> {
+                    logMessage(
+                        getString(R.string.log_call_log_unavailable, lookupResult.errorMessage),
+                        true
+                    )
+                    completeCallVerification(null, pausedByIncomingCall)
+                }
+                attempt < CALL_LOG_VERIFICATION_MAX_RETRIES -> {
+                    scheduleCallVerification(
+                        dialedNumber = dialedNumber,
+                        startedAt = startedAt,
+                        pausedByIncomingCall = pausedByIncomingCall,
+                        attempt = attempt + 1,
+                        delayMs = CALL_LOG_VERIFICATION_RETRY_DELAY_MS
+                    )
+                }
+                else -> {
+                    completeCallVerification(null, pausedByIncomingCall)
+                }
+            }
+        }
+
+        pendingCallVerificationRunnable = verificationRunnable
+        handler.postDelayed(verificationRunnable, delayMs)
+    }
+
+    private fun completeCallVerification(
+        verification: CallVerification?,
+        pausedByIncomingCall: Boolean
+    ) {
+        pendingCallVerificationRunnable = null
 
         when {
             verification?.durationSeconds?.let { it > 0 } == true -> {
@@ -522,8 +594,8 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             verification != null -> {
-                failedCalls.incrementAndGet()
-                logMessage(getString(R.string.log_call_verified_failed), true)
+                completedCalls.incrementAndGet()
+                logMessage(getString(R.string.log_call_verified_success_short), true)
             }
             else -> {
                 failedCalls.incrementAndGet()
@@ -563,6 +635,8 @@ class MainActivity : AppCompatActivity() {
                 isPausedForIncomingCall = false
                 waitingForNextCall = false
                 callTimeoutRunnable?.let { handler.removeCallbacks(it) }
+                pendingCallVerificationRunnable?.let { handler.removeCallbacks(it) }
+                pendingCallVerificationRunnable = null
                 handler.removeCallbacks(nextCallRunnable)
                 currentDialedNumber = null
                 currentAttemptStartedAt = 0L
@@ -580,6 +654,8 @@ class MainActivity : AppCompatActivity() {
         isPausedForIncomingCall = false
         waitingForNextCall = false
         callTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        pendingCallVerificationRunnable?.let { handler.removeCallbacks(it) }
+        pendingCallVerificationRunnable = null
         handler.removeCallbacks(nextCallRunnable)
         resetUI()
 
@@ -677,12 +753,12 @@ class MainActivity : AppCompatActivity() {
         return ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun verifyLatestOutgoingCall(
+    private fun lookupLatestOutgoingCall(
         targetNumber: String,
         startedAt: Long
-    ): CallVerification? {
+    ): CallLogLookupResult {
         if (!hasPermission(Manifest.permission.READ_CALL_LOG) || startedAt == 0L) {
-            return null
+            return CallLogLookupResult()
         }
 
         val projection = arrayOf(
@@ -711,19 +787,19 @@ class MainActivity : AppCompatActivity() {
                 while (cursor.moveToNext()) {
                     val loggedNumber = cursor.getString(numberIndex)
                     if (CallNumberUtils.numbersMatch(loggedNumber, targetNumber)) {
-                        return CallVerification(
-                            durationSeconds = cursor.getLong(durationIndex)
+                        return CallLogLookupResult(
+                            verification = CallVerification(
+                                durationSeconds = cursor.getLong(durationIndex)
+                            )
                         )
                     }
                 }
-                null
-            }
+                CallLogLookupResult()
+            } ?: CallLogLookupResult()
         } catch (e: SecurityException) {
-            logMessage(getString(R.string.log_call_log_unavailable, e.message ?: "security exception"), true)
-            null
+            CallLogLookupResult(errorMessage = e.message ?: "security exception")
         } catch (e: Exception) {
-            logMessage(getString(R.string.log_call_log_unavailable, e.message ?: "unknown error"), true)
-            null
+            CallLogLookupResult(errorMessage = e.message ?: "unknown error")
         }
     }
 
@@ -747,8 +823,15 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         handler.removeCallbacks(nextCallRunnable)
         callTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        pendingCallVerificationRunnable?.let { handler.removeCallbacks(it) }
+        pendingCallVerificationRunnable = null
         teardownCallStateListener()
     }
+
+    private data class CallLogLookupResult(
+        val verification: CallVerification? = null,
+        val errorMessage: String? = null
+    )
 
     private data class CallVerification(
         val durationSeconds: Long
